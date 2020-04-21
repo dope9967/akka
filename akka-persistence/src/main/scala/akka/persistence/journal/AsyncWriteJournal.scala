@@ -21,7 +21,7 @@ import akka.pattern.CircuitBreaker
 /**
  * Abstract journal, optimized for asynchronous, non-blocking writes.
  */
-trait AsyncWriteJournal extends Actor with WriteJournalBase with AsyncRecovery {
+trait AsyncWriteJournal extends Actor with WriteJournalBase with AsyncRecovery with AsyncIdempotency {
   import AsyncWriteJournal._
   import JournalProtocol._
 

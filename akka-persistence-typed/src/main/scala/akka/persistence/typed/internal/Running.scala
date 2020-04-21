@@ -116,12 +116,13 @@ private[akka] object Running {
     }
 
     def onCommand(state: RunningState[S], cmd: C): Behavior[InternalProtocol] = {
+      //TODO add check for idempotency here, before the handler is executed
       val effect = setup.commandHandler(state.state, cmd)
       applyEffects(cmd, state, effect.asInstanceOf[EffectImpl[E, S]]) // TODO can we avoid the cast?
     }
 
     @tailrec def applyEffects(
-        msg: Any,
+        msg: C,
         state: RunningState[S],
         effect: Effect[E, S],
         sideEffects: immutable.Seq[SideEffect[S]] = Nil): Behavior[InternalProtocol] = {
@@ -146,7 +147,14 @@ private[akka] object Running {
           val eventToPersist = adaptEvent(event)
           val eventAdapterManifest = setup.eventAdapter.manifest(event)
 
-          val newState2 = internalPersist(setup.context, msg, newState, eventToPersist, eventAdapterManifest)
+          val newState2 =
+            internalPersist(
+              setup.context,
+              msg,
+              newState,
+              eventToPersist,
+              eventAdapterManifest,
+              setup.idempotence.map(_.idempotenceKey(msg)))
 
           val shouldSnapshotAfterPersist = setup.shouldSnapshot(newState2.state, event, newState2.seqNr)
 
@@ -168,7 +176,12 @@ private[akka] object Running {
 
             val eventsToPersist = events.map(evt => (adaptEvent(evt), setup.eventAdapter.manifest(evt)))
 
-            val newState2 = internalPersistAll(setup.context, msg, newState, eventsToPersist)
+            val newState2 = internalPersistAll(
+              setup.context,
+              msg,
+              newState,
+              eventsToPersist,
+              setup.idempotence.map(_.idempotenceKey(msg)))
 
             persistingEvents(newState2, state, events.size, shouldSnapshotAfterPersist, sideEffects)
 

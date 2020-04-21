@@ -207,4 +207,8 @@ object EventSourcedBehavior {
    * If not specified the actor will be stopped on failure.
    */
   def onPersistFailure(backoffStrategy: BackoffSupervisorStrategy): EventSourcedBehavior[Command, Event, State]
+
+  //TODO consider adding config for whether unhandled commands should persist idempotence keys, or commands that do not emit events
+  //TODO consider moving to criteria
+  def withIdempotence(idempotence: Idempotence[Command]): EventSourcedBehavior[Command, Event, State]
 }

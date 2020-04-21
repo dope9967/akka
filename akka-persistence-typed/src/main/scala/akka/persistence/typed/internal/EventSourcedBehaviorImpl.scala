@@ -74,6 +74,7 @@ private[akka] final case class EventSourcedBehaviorImpl[Command, Event, State](
     recovery: Recovery = Recovery(),
     retention: RetentionCriteria = RetentionCriteria.disabled,
     supervisionStrategy: SupervisorStrategy = SupervisorStrategy.stop,
+    idempotence: Option[Idempotence[Command]] = None,
     override val signalHandler: PartialFunction[(State, Signal), Unit] = PartialFunction.empty)
     extends EventSourcedBehavior[Command, Event, State] {
 
@@ -136,7 +137,8 @@ private[akka] final case class EventSourcedBehaviorImpl[Command, Event, State](
             retention,
             holdingRecoveryPermit = false,
             settings = settings,
-            stashState = stashState)
+            stashState = stashState,
+            idempotence = idempotence)
 
           // needs to accept Any since we also can get messages from the journal
           // not part of the user facing Command protocol
@@ -220,6 +222,8 @@ private[akka] final case class EventSourcedBehaviorImpl[Command, Event, State](
       backoffStrategy: BackoffSupervisorStrategy): EventSourcedBehavior[Command, Event, State] =
     copy(supervisionStrategy = backoffStrategy)
 
+  override def withIdempotence(idempotence: Idempotence[Command]): EventSourcedBehavior[Command, Event, State] =
+    copy(idempotence = Some(idempotence))
 }
 
 /** Protocol used internally by the eventsourced behaviors. */
