@@ -438,6 +438,49 @@ private[akka] object Running {
 
   // --------------------------
 
+  @InternalApi private[akka] class CheckingIdempotence(state: RunningState[S], pendingCommand: C)
+      extends AbstractBehavior[InternalProtocol](setup.context) {
+
+    override def onMessage(msg: InternalProtocol): Behavior[InternalProtocol] = {
+      case cmd: IncomingCommand[C] @unchecked =>
+        onCommand(cmd)
+      case JournalResponse(r)     => onJournalResponse(r)
+      case SnapshotterResponse(r) => onDeleteSnapshotResponse(r, state.state)
+      case _ =>
+        Behaviors.unhandled
+    }
+
+    def onCommand(cmd: IncomingCommand[C]): Behavior[InternalProtocol] = {
+      if (state.receivedPoisonPill) {
+        if (setup.settings.logOnStashing)
+          setup.log.debug("Discarding message [{}], because actor is to be stopped.", cmd)
+        Behaviors.unhandled
+      } else {
+        stashInternal(cmd)
+        Behaviors.same
+      }
+    }
+
+    final def onJournalResponse(response: Response): Behavior[InternalProtocol] = {
+
+      def onIdempotenceSuccess(result: Boolean): Behavior[InternalProtocol] = {}
+
+      response match {
+        case IdempotencyCheckSuccess(result) =>
+        //TODO add sealed trait for idempotent command so that on failure a response can be formed to caller
+        //TODO if idempotency is success, then side effects are applied and processing of commands resumes - copy pasta from HandlingCommands
+        case IdempotencyCheckFailure(cause) =>
+          val msg = "Exception while checking for idempotency key existence. " +
+            s"PersistenceId [${setup.persistenceId.id}]. ${cause.getMessage}"
+          throw new JournalFailureException(msg, cause)
+        case _ =>
+          onDeleteEventsJournalResponse(response, state.state)
+      }
+    }
+  }
+
+  // --------------------------
+
   def applySideEffects(effects: immutable.Seq[SideEffect[S]], state: RunningState[S]): Behavior[InternalProtocol] = {
     var behavior: Behavior[InternalProtocol] = new HandlingCommands(state)
     val it = effects.iterator
