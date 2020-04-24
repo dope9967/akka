@@ -84,5 +84,9 @@ class SharedLeveldbStore(cfg: Config) extends LeveldbStore {
     case CheckIndempotencyKeyExists(persistenceId, idempotencyKey) =>
       //TODO implement idempotency key check
       ???
+
+    case WriteIdempotencyKey(persistenceId, idempotencyKey) =>
+      //TODO implement idempotency key write
+      ???
   }
 }

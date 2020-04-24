@@ -197,18 +197,32 @@ trait AsyncWriteJournal extends Actor with WriteJournalBase with AsyncRecovery w
             if (publish) eventStream.publish(d)
           }
 
-      case i @ CheckIndempotencyKeyExists(persistenceId, idempotencyKey, persistentActor) =>
+      case ci @ CheckIndempotencyKeyExists(persistenceId, idempotencyKey, persistentActor) =>
         breaker
-          .withCircuitBreaker(asyncCheckIndempotencyKeyExists(persistenceId, idempotencyKey))
-          .map { result =>
-            IdempotencyCheckSuccess(result)
+          .withCircuitBreaker(asyncCheckIdempotencyKeyExists(persistenceId, idempotencyKey))
+          .map { exists =>
+            IdempotencyCheckSuccess(exists)
           }
           .recover {
             case e => IdempotencyCheckFailure(e)
           }
           .pipeTo(persistentActor)
           .onComplete { _ =>
-            if (publish) eventStream.publish(i)
+            if (publish) eventStream.publish(ci)
+          }
+
+      case wi @ WriteIdempotencyKey(persistenceId, idempotencyKey, persistentActor) =>
+        breaker
+          .withCircuitBreaker(asyncWriteIdempotencyKey(persistenceId, idempotencyKey))
+          .map { _ =>
+            WriteIdempotencyKeySuccess
+          }
+          .recover {
+            case e => WriteIdempotencyKeyFailure(e)
+          }
+          .pipeTo(persistentActor)
+          .onComplete { _ =>
+            if (publish) eventStream.publish(wi)
           }
     }
   }

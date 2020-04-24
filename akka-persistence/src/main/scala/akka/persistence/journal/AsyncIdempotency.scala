@@ -8,5 +8,7 @@ import scala.concurrent.Future
 
 trait AsyncIdempotency {
 
-  def asyncCheckIndempotencyKeyExists(persistenceId: String, key: String): Future[Boolean]
+  def asyncCheckIdempotencyKeyExists(persistenceId: String, key: String): Future[Boolean]
+
+  def asyncWriteIdempotencyKey(persistenceId: String, key: String): Future[Unit]
 }

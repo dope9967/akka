@@ -25,9 +25,19 @@ object EventSourcedBehaviorIdempotenceSpec {
       extends Command
       with IdempotentCommand
 
-  case class NoSideEffect(override val idempotencyKey: String, override val replyTo: ActorRef[IdempotenceReply])
-      extends Command
-      with IdempotentCommand
+  object NoSideEffect {
+    case class WriteAlways(override val idempotencyKey: String, override val replyTo: ActorRef[IdempotenceReply])
+        extends Command
+        with IdempotentCommand
+
+    case class WriteOnlyWithPersist(
+        override val idempotencyKey: String,
+        override val replyTo: ActorRef[IdempotenceReply])
+        extends Command
+        with IdempotentCommand {
+      override val writeConfig: IdempotenceKeyWriteConfig = OnlyWriteIdempotenceKeyWithPersist
+    }
+  }
 
   case object AllGood extends IdempotenceReply
 
@@ -39,7 +49,9 @@ object EventSourcedBehaviorIdempotenceSpec {
         command match {
           case SideEffect(_, replyTo) =>
             Effect.persist(1).thenReply(replyTo)(_ => AllGood)
-          case NoSideEffect(_, replyTo) =>
+          case NoSideEffect.WriteAlways(_, replyTo) =>
+            Effect.none[Int, Int].thenReply(replyTo)(_ => AllGood)
+          case NoSideEffect.WriteOnlyWithPersist(_, replyTo) =>
             Effect.none[Int, Int].thenReply(replyTo)(_ => AllGood)
         }
       },
@@ -56,31 +68,45 @@ class EventSourcedBehaviorIdempotenceSpec
   val pidCounter = new AtomicInteger(0)
   private def nextPid(): PersistenceId = PersistenceId.ofUniqueId(s"c${pidCounter.incrementAndGet()})")
 
-  "consume idempotent command" in {
-    val idempotenceKey = UUID.randomUUID().toString
-    val c = spawn(idempotentState(nextPid))
-    val probe = TestProbe[IdempotenceReply]
-    c ! SideEffect(idempotenceKey, probe.ref)
-    probe.expectMessage(AllGood)
+  "side-effecting idempotent command" should {
+    "consume idempotent command" in {
+      val idempotenceKey = UUID.randomUUID().toString
+      val c = spawn(idempotentState(nextPid))
+      val probe = TestProbe[IdempotenceReply]
+      c ! SideEffect(idempotenceKey, probe.ref)
+      probe.expectMessage(AllGood)
+    }
+
+    "fail consume idempotent command the second time" in {
+      val idempotenceKey = UUID.randomUUID().toString
+      val c = spawn(idempotentState(nextPid))
+      val probe = TestProbe[IdempotenceReply]
+      c ! SideEffect(idempotenceKey, probe.ref)
+      probe.expectMessage(AllGood)
+      c ! SideEffect(idempotenceKey, probe.ref)
+      probe.expectMessage(IdempotenceFailure)
+    }
   }
 
-  "fail consume idempotent command the second time" in {
-    val idempotenceKey = UUID.randomUUID().toString
-    val c = spawn(idempotentState(nextPid))
-    val probe = TestProbe[IdempotenceReply]
-    c ! SideEffect(idempotenceKey, probe.ref)
-    probe.expectMessage(AllGood)
-    c ! SideEffect(idempotenceKey, probe.ref)
-    probe.expectMessage(IdempotenceFailure)
-  }
+  "not side-effecting idempotent command" should {
+    "fail consume the second time if key should always write" in {
+      val idempotenceKey = UUID.randomUUID().toString
+      val c = spawn(idempotentState(nextPid))
+      val probe = TestProbe[IdempotenceReply]
+      c ! NoSideEffect.WriteAlways(idempotenceKey, probe.ref)
+      probe.expectMessage(AllGood)
+      c ! NoSideEffect.WriteAlways(idempotenceKey, probe.ref)
+      probe.expectMessage(IdempotenceFailure)
+    }
 
-  "succeed consume not side-effecting idempotent command the second time" in {
-    val idempotenceKey = UUID.randomUUID().toString
-    val c = spawn(idempotentState(nextPid))
-    val probe = TestProbe[IdempotenceReply]
-    c ! NoSideEffect(idempotenceKey, probe.ref)
-    probe.expectMessage(AllGood)
-    c ! NoSideEffect(idempotenceKey, probe.ref)
-    probe.expectMessage(AllGood)
+    "succeed consume the second time if key should write only with persist" in {
+      val idempotenceKey = UUID.randomUUID().toString
+      val c = spawn(idempotentState(nextPid))
+      val probe = TestProbe[IdempotenceReply]
+      c ! NoSideEffect.WriteOnlyWithPersist(idempotenceKey, probe.ref)
+      probe.expectMessage(AllGood)
+      c ! NoSideEffect.WriteOnlyWithPersist(idempotenceKey, probe.ref)
+      probe.expectMessage(AllGood)
+    }
   }
 }

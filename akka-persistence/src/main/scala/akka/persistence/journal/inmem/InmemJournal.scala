@@ -105,8 +105,13 @@ object InmemJournal {
     }
   }
 
-  override def asyncCheckIndempotencyKeyExists(persistenceId: String, key: String): Future[Boolean] = {
+  override def asyncCheckIdempotencyKeyExists(persistenceId: String, key: String): Future[Boolean] = {
     Future.successful(keys.get(persistenceId).exists(_.contains(key)))
+  }
+
+  override def asyncWriteIdempotencyKey(persistenceId: String, key: String): Future[Unit] = {
+    addKey(persistenceId, key)
+    Future.successful(())
   }
 }
 

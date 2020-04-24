@@ -205,6 +205,8 @@ final class PersistencePluginProxy(config: Config) extends Actor with Stash with
           persistentActor ! DeleteMessagesFailure(timeoutException, toSequenceNr)
         case CheckIndempotencyKeyExists(_, _, persistentActor) =>
           persistentActor ! IdempotencyCheckFailure(timeoutException)
+        case WriteIdempotencyKey(_, _, persistentActor) =>
+          persistentActor ! IdempotencyCheckFailure(timeoutException)
       }
 
     case req: SnapshotProtocol.Request =>

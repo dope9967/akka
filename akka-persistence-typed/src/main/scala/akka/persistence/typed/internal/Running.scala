@@ -36,7 +36,15 @@ import akka.persistence.typed.SnapshotFailed
 import akka.persistence.typed.internal.Running.WithSeqNrAccessible
 import akka.persistence.typed.SnapshotMetadata
 import akka.persistence.typed.SnapshotSelectionCriteria
-import akka.persistence.typed.scaladsl.{ Effect, IdempotenceFailure, IdempotentCommand }
+import akka.persistence.typed.scaladsl.{
+  AlwaysWriteIdempotenceKey,
+  Effect,
+  EffectBuilder,
+  IdempotenceFailure,
+  IdempotentCommand,
+  OnlyWriteIdempotenceKeyWithPersist,
+  ReplyEffect
+}
 import akka.util.unused
 
 /**
@@ -118,8 +126,8 @@ private[akka] object Running {
     def onCommand(state: RunningState[S], cmd: C): Behavior[InternalProtocol] = {
       cmd match {
         case ic: IdempotentCommand =>
-          internalCheckIdempotency(ic.idempotencyKey)
-          new CheckingIdempotence(state, ic.asInstanceOf[C with IdempotentCommand])
+          internalCheckIdempotencyKeyExists(ic.idempotencyKey)
+          new CheckingIdempotenceKey(state, ic.asInstanceOf[C with IdempotentCommand], ic.idempotencyKey) // TODO can we avoid the cast?
         case _ =>
           val effect = setup.commandHandler(state.state, cmd)
           applyEffects(cmd, state, effect.asInstanceOf[EffectImpl[E, S]]) // TODO can we avoid the cast?
@@ -446,7 +454,76 @@ private[akka] object Running {
 
   // --------------------------
 
-  @InternalApi private[akka] class CheckingIdempotence[IC <: C with IdempotentCommand](
+  @InternalApi private[akka] class CheckingIdempotenceKey[IC <: C with IdempotentCommand](
+      state: RunningState[S],
+      pendingCommand: IC,
+      idempotencyKey: String)
+      extends AbstractBehavior[InternalProtocol](setup.context) {
+
+    override def onMessage(msg: InternalProtocol): Behavior[InternalProtocol] = msg match {
+      case cmd: IncomingCommand[C] @unchecked =>
+        onCommand(cmd)
+      case JournalResponse(r)     => onJournalResponse(r)
+      case SnapshotterResponse(r) => onDeleteSnapshotResponse(r, state.state)
+      case _ =>
+        Behaviors.unhandled
+    }
+
+    def onCommand(cmd: IncomingCommand[C]): Behavior[InternalProtocol] = {
+      if (state.receivedPoisonPill) {
+        if (setup.settings.logOnStashing)
+          setup.log.debug("Discarding message [{}], because actor is to be stopped.", cmd)
+        Behaviors.unhandled
+      } else {
+        stashInternal(cmd)
+        Behaviors.same
+      }
+    }
+
+    final def onJournalResponse(response: Response): Behavior[InternalProtocol] = {
+      //TODO consider keeping a cache of recently checked keys
+      response match {
+        case IdempotencyCheckSuccess(false) =>
+          val effect = setup.commandHandler(state.state, pendingCommand).asInstanceOf[EffectImpl[E, S]] // TODO can we avoid the cast?
+
+          val persistEffectPresent = {
+            @scala.annotation.tailrec
+            def persistEffectPresent(effect: EffectImpl[E, S]): Boolean = effect match {
+              case Persist(_) =>
+                true
+              case PersistAll(_) =>
+                true
+              case CompositeEffect(eff, _) =>
+                persistEffectPresent(eff.asInstanceOf[EffectImpl[E, S]])
+              case _ =>
+                false
+            }
+            persistEffectPresent(effect)
+          }
+
+          if (pendingCommand.writeConfig.doExplicitWrite(persistEffectPresent)) {
+            internalWriteIdempotencyKey(idempotencyKey)
+            new WritingIdempotenceKey(state, pendingCommand)
+          } else {
+            val running = new HandlingCommands(state)
+            running.applyEffects(pendingCommand, state, effect)
+          }
+        case IdempotencyCheckSuccess(true) =>
+          pendingCommand.replyTo ! IdempotenceFailure
+          tryUnstashOne(new HandlingCommands(state))
+        case IdempotencyCheckFailure(cause) =>
+          val msg = "Exception while checking for idempotency key existence. " +
+            s"PersistenceId [${setup.persistenceId.id}]. ${cause.getMessage}"
+          throw new JournalFailureException(msg, cause)
+        case _ =>
+          onDeleteEventsJournalResponse(response, state.state)
+      }
+    }
+  }
+
+  // --------------------------
+
+  @InternalApi private[akka] class WritingIdempotenceKey[IC <: C with IdempotentCommand](
       state: RunningState[S],
       pendingCommand: IC)
       extends AbstractBehavior[InternalProtocol](setup.context) {
@@ -472,16 +549,14 @@ private[akka] object Running {
     }
 
     final def onJournalResponse(response: Response): Behavior[InternalProtocol] = {
+      //TODO consider keeping a cache of recently checked keys
       response match {
-        case IdempotencyCheckSuccess(false) =>
+        case WriteIdempotencyKeySuccess =>
           val effect = setup.commandHandler(state.state, pendingCommand)
           val running = new HandlingCommands(state)
           running.applyEffects(pendingCommand, state, effect.asInstanceOf[EffectImpl[E, S]]) // TODO can we avoid the cast?
-        case IdempotencyCheckSuccess(true) =>
-          pendingCommand.replyTo ! IdempotenceFailure
-          tryUnstashOne(new HandlingCommands(state))
-        case IdempotencyCheckFailure(cause) =>
-          val msg = "Exception while checking for idempotency key existence. " +
+        case WriteIdempotencyKeyFailure(cause) =>
+          val msg = "Exception while writing idempotency key. " +
             s"PersistenceId [${setup.persistenceId.id}]. ${cause.getMessage}"
           throw new JournalFailureException(msg, cause)
         case _ =>

@@ -85,6 +85,9 @@ class ChaosJournal extends AsyncWriteJournal {
   def shouldFail(rate: Double): Boolean =
     random.nextDouble() < rate
 
-  override def asyncCheckIndempotencyKeyExists(persistenceId: String, key: String): Future[Boolean] =
+  override def asyncCheckIdempotencyKeyExists(persistenceId: String, key: String): Future[Boolean] =
     Future.successful(keys.get(persistenceId).exists(_.contains(key)))
+
+  override def asyncWriteIdempotencyKey(persistenceId: String, key: String): Future[Unit] =
+    Future.successful(addKey(persistenceId, key))
 }

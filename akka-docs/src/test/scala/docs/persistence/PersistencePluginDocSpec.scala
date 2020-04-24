@@ -169,7 +169,8 @@ class MyJournal extends AsyncWriteJournal {
   // optionally override:
   override def receivePluginInternal: Receive = super.receivePluginInternal
 
-  override def asyncCheckIndempotencyKeyExists(persistenceId: String, key: String): Future[Boolean] = ???
+  override def asyncCheckIdempotencyKeyExists(persistenceId: String, key: String): Future[Boolean] = ???
+  override def asyncWriteIdempotencyKey(persistenceId: String, key: String): Future[Unit] = ???
 }
 
 class MySnapshotStore extends SnapshotStore {

@@ -152,9 +152,14 @@ private[akka] trait JournalInteractions[C, E, S] {
           toSequenceNr)
     }
 
-  protected def internalCheckIdempotency(idempotencyKey: String): Unit = {
+  protected def internalCheckIdempotencyKeyExists(idempotencyKey: String): Unit = {
     val self = setup.selfClassic
     setup.journal.tell(JournalProtocol.CheckIndempotencyKeyExists(setup.persistenceId.id, idempotencyKey, self), self)
+  }
+
+  protected def internalWriteIdempotencyKey(idempotencyKey: String): Unit = {
+    val self = setup.selfClassic
+    setup.journal.tell(JournalProtocol.WriteIdempotencyKey(setup.persistenceId.id, idempotencyKey, self), self)
   }
 }
 

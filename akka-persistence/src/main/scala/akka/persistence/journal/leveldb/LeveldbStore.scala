@@ -140,7 +140,10 @@ private[persistence] trait LeveldbStore
     }
 
   //TODO implement idempotency key check
-  def asyncCheckIndempotencyKeyExists(persistenceId: String, key: String): Future[Boolean] = ???
+  def asyncCheckIdempotencyKeyExists(persistenceId: String, key: String): Future[Boolean] = ???
+
+  //TODO implement idempotency key check
+  def asyncWriteIdempotencyKey(persistenceId: String, key: String): Future[Unit] = ???
 
   def leveldbSnapshot(): ReadOptions = leveldbReadOptions.snapshot(leveldb.getSnapshot)
 
