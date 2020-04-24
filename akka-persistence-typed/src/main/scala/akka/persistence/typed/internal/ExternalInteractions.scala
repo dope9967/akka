@@ -151,6 +151,11 @@ private[akka] trait JournalInteractions[C, E, S] {
             s"toSequenceNr [$toSequenceNr] must be less than or equal to lastSequenceNr [$lastSequenceNr]"),
           toSequenceNr)
     }
+
+  protected def internalCheckIdempotency(idempotencyKey: String): Unit = {
+    val self = setup.selfClassic
+    setup.journal.tell(JournalProtocol.CheckIndempotencyKeyExists(setup.persistenceId.id, idempotencyKey, self), self)
+  }
 }
 
 /** INTERNAL API */

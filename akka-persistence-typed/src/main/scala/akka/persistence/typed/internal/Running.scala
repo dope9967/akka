@@ -36,7 +36,7 @@ import akka.persistence.typed.SnapshotFailed
 import akka.persistence.typed.internal.Running.WithSeqNrAccessible
 import akka.persistence.typed.SnapshotMetadata
 import akka.persistence.typed.SnapshotSelectionCriteria
-import akka.persistence.typed.scaladsl.Effect
+import akka.persistence.typed.scaladsl.{ Effect, IdempotenceFailure, IdempotentCommand }
 import akka.util.unused
 
 /**
@@ -116,9 +116,14 @@ private[akka] object Running {
     }
 
     def onCommand(state: RunningState[S], cmd: C): Behavior[InternalProtocol] = {
-      //TODO add check for idempotency here, before the handler is executed
-      val effect = setup.commandHandler(state.state, cmd)
-      applyEffects(cmd, state, effect.asInstanceOf[EffectImpl[E, S]]) // TODO can we avoid the cast?
+      cmd match {
+        case ic: IdempotentCommand =>
+          internalCheckIdempotency(ic.idempotencyKey)
+          new CheckingIdempotence(state, ic.asInstanceOf[C with IdempotentCommand])
+        case _ =>
+          val effect = setup.commandHandler(state.state, cmd)
+          applyEffects(cmd, state, effect.asInstanceOf[EffectImpl[E, S]]) // TODO can we avoid the cast?
+      }
     }
 
     @tailrec def applyEffects(
@@ -147,14 +152,15 @@ private[akka] object Running {
           val eventToPersist = adaptEvent(event)
           val eventAdapterManifest = setup.eventAdapter.manifest(event)
 
+          val idempotencyKey = msg match {
+            case ic: IdempotentCommand =>
+              Some(ic.idempotencyKey)
+            case _ =>
+              None
+          }
+
           val newState2 =
-            internalPersist(
-              setup.context,
-              msg,
-              newState,
-              eventToPersist,
-              eventAdapterManifest,
-              setup.idempotence.map(_.idempotenceKey(msg)))
+            internalPersist(setup.context, msg, newState, eventToPersist, eventAdapterManifest, idempotencyKey)
 
           val shouldSnapshotAfterPersist = setup.shouldSnapshot(newState2.state, event, newState2.seqNr)
 
@@ -176,12 +182,14 @@ private[akka] object Running {
 
             val eventsToPersist = events.map(evt => (adaptEvent(evt), setup.eventAdapter.manifest(evt)))
 
-            val newState2 = internalPersistAll(
-              setup.context,
-              msg,
-              newState,
-              eventsToPersist,
-              setup.idempotence.map(_.idempotenceKey(msg)))
+            val idempotencyKey = msg match {
+              case ic: IdempotentCommand =>
+                Some(ic.idempotencyKey)
+              case _ =>
+                None
+            }
+
+            val newState2 = internalPersistAll(setup.context, msg, newState, eventsToPersist, idempotencyKey)
 
             persistingEvents(newState2, state, events.size, shouldSnapshotAfterPersist, sideEffects)
 
@@ -438,10 +446,12 @@ private[akka] object Running {
 
   // --------------------------
 
-  @InternalApi private[akka] class CheckingIdempotence(state: RunningState[S], pendingCommand: C)
+  @InternalApi private[akka] class CheckingIdempotence[IC <: C with IdempotentCommand](
+      state: RunningState[S],
+      pendingCommand: IC)
       extends AbstractBehavior[InternalProtocol](setup.context) {
 
-    override def onMessage(msg: InternalProtocol): Behavior[InternalProtocol] = {
+    override def onMessage(msg: InternalProtocol): Behavior[InternalProtocol] = msg match {
       case cmd: IncomingCommand[C] @unchecked =>
         onCommand(cmd)
       case JournalResponse(r)     => onJournalResponse(r)
@@ -462,13 +472,14 @@ private[akka] object Running {
     }
 
     final def onJournalResponse(response: Response): Behavior[InternalProtocol] = {
-
-      def onIdempotenceSuccess(result: Boolean): Behavior[InternalProtocol] = {}
-
       response match {
-        case IdempotencyCheckSuccess(result) =>
-        //TODO add sealed trait for idempotent command so that on failure a response can be formed to caller
-        //TODO if idempotency is success, then side effects are applied and processing of commands resumes - copy pasta from HandlingCommands
+        case IdempotencyCheckSuccess(false) =>
+          val effect = setup.commandHandler(state.state, pendingCommand)
+          val running = new HandlingCommands(state)
+          running.applyEffects(pendingCommand, state, effect.asInstanceOf[EffectImpl[E, S]]) // TODO can we avoid the cast?
+        case IdempotencyCheckSuccess(true) =>
+          pendingCommand.replyTo ! IdempotenceFailure
+          tryUnstashOne(new HandlingCommands(state))
         case IdempotencyCheckFailure(cause) =>
           val msg = "Exception while checking for idempotency key existence. " +
             s"PersistenceId [${setup.persistenceId.id}]. ${cause.getMessage}"

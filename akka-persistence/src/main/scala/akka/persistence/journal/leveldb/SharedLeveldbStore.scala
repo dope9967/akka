@@ -80,5 +80,9 @@ class SharedLeveldbStore(cfg: Config) extends LeveldbStore {
           case e => ReplayFailure(e)
         }
         .pipeTo(replyTo)
+
+    case CheckIndempotencyKeyExists(persistenceId, idempotencyKey) =>
+      //TODO implement idempotency key check
+      ???
   }
 }

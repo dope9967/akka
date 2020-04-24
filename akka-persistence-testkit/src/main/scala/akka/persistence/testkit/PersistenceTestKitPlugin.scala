@@ -48,6 +48,9 @@ class PersistenceTestKitPlugin extends AsyncWriteJournal {
       if (found < fromSequenceNr) fromSequenceNr else found
     })
 
+  override def asyncCheckIndempotencyKeyExists(persistenceId: String, key: String): Future[Boolean] =
+    //TODO implement idempotency key check
+    ???
 }
 
 object PersistenceTestKitPlugin {

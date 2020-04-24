@@ -9,7 +9,7 @@ import akka.actor.typed.scaladsl.ActorContext
 import akka.actor.{ ActorRef, Cancellable }
 import akka.annotation.InternalApi
 import akka.persistence._
-import akka.persistence.typed.scaladsl.{ EventSourcedBehavior, Idempotence, RetentionCriteria }
+import akka.persistence.typed.scaladsl.{ EventSourcedBehavior, RetentionCriteria }
 import akka.persistence.typed.{ EventAdapter, PersistenceId, SnapshotAdapter }
 import akka.util.OptionVal
 import org.slf4j.{ Logger, MDC }
@@ -47,8 +47,7 @@ private[akka] final class BehaviorSetup[C, E, S](
     val retention: RetentionCriteria,
     var holdingRecoveryPermit: Boolean,
     val settings: EventSourcedSettings,
-    val stashState: StashState,
-    val idempotence: Option[Idempotence[C]]) {
+    val stashState: StashState) {
 
   import BehaviorSetup._
   import InternalProtocol.RecoveryTickEvent

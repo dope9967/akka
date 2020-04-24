@@ -7,10 +7,11 @@ package akka.persistence.journal
 import akka.AkkaException
 import akka.actor._
 import akka.pattern.ask
+import akka.persistence.JournalProtocol.{ Request, Response }
 import akka.persistence._
 import akka.util._
-import scala.util.Try
 
+import scala.util.Try
 import scala.collection.immutable
 import scala.concurrent._
 import scala.concurrent.duration.Duration
@@ -91,6 +92,18 @@ private[persistence] trait AsyncWriteProxy extends AsyncWriteJournal with Stash 
       case None => storeNotInitialized
     }
 
+  override def asyncCheckIndempotencyKeyExists(persistenceId: String, key: String): Future[Boolean] = {
+    store match {
+      case Some(s) =>
+        (s ? CheckIndempotencyKeyExists(persistenceId, key)).flatMap {
+          case IdempotencyCheckSuccess(result) =>
+            Future.successful(result)
+          case IdempotencyCheckFailure(cause) =>
+            Future.failed(cause)
+        }
+      case None => storeNotInitialized
+    }
+  }
 }
 
 /**
@@ -120,6 +133,14 @@ private[persistence] object AsyncWriteTarget {
   @SerialVersionUID(1L)
   final case class ReplayFailure(cause: Throwable)
 
+  @SerialVersionUID(1L)
+  final case class CheckIndempotencyKeyExists(persistenceId: String, idempotencyKey: String)
+
+  @SerialVersionUID(1L)
+  case class IdempotencyCheckSuccess(result: Boolean)
+
+  @SerialVersionUID(1L)
+  case class IdempotencyCheckFailure(cause: Throwable)
 }
 
 /**

@@ -128,6 +128,11 @@ public class LambdaPersistencePluginDocTest {
     public Future<Long> doAsyncReadHighestSequenceNr(String persistenceId, long fromSequenceNr) {
       return null;
     }
+
+      @Override
+      public Future<Object> asyncCheckIndempotencyKeyExists(String persistenceId, String key) {
+          return null;
+      }
   }
 
   static Object o2 =

@@ -72,6 +72,7 @@ private[persistence] trait LeveldbStore
 
   import Key._
 
+  //TODO implement idempotency key storage
   def asyncWriteMessages(messages: immutable.Seq[AtomicWrite]): Future[immutable.Seq[Try[Unit]]] = {
     var persistenceIds = Set.empty[String]
     var allTags = Set.empty[String]
@@ -137,6 +138,9 @@ private[persistence] trait LeveldbStore
     } catch {
       case NonFatal(e) => Future.failed(e)
     }
+
+  //TODO implement idempotency key check
+  def asyncCheckIndempotencyKeyExists(persistenceId: String, key: String): Future[Boolean] = ???
 
   def leveldbSnapshot(): ReadOptions = leveldbReadOptions.snapshot(leveldb.getSnapshot)
 
