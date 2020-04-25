@@ -7,7 +7,6 @@ package akka.persistence.journal
 import akka.AkkaException
 import akka.actor._
 import akka.pattern.ask
-import akka.persistence.JournalProtocol.{ Request, Response }
 import akka.persistence._
 import akka.util._
 

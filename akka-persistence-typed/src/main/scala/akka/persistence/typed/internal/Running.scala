@@ -36,15 +36,7 @@ import akka.persistence.typed.SnapshotFailed
 import akka.persistence.typed.internal.Running.WithSeqNrAccessible
 import akka.persistence.typed.SnapshotMetadata
 import akka.persistence.typed.SnapshotSelectionCriteria
-import akka.persistence.typed.scaladsl.{
-  AlwaysWriteIdempotenceKey,
-  Effect,
-  EffectBuilder,
-  IdempotenceFailure,
-  IdempotentCommand,
-  OnlyWriteIdempotenceKeyWithPersist,
-  ReplyEffect
-}
+import akka.persistence.typed.scaladsl.{ Effect, IdempotenceFailure, IdempotentCommand }
 import akka.util.unused
 
 /**
