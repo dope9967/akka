@@ -25,17 +25,21 @@ import akka.persistence.SaveSnapshotFailure
 import akka.persistence.SaveSnapshotSuccess
 import akka.persistence.SnapshotProtocol
 import akka.persistence.journal.Tagged
-import akka.persistence.typed.DeleteSnapshotsCompleted
-import akka.persistence.typed.DeleteSnapshotsFailed
-import akka.persistence.typed.DeleteEventsCompleted
-import akka.persistence.typed.DeleteEventsFailed
-import akka.persistence.typed.DeletionTarget
-import akka.persistence.typed.EventRejectedException
-import akka.persistence.typed.SnapshotCompleted
-import akka.persistence.typed.SnapshotFailed
+import akka.persistence.typed.{
+  DeleteEventsCompleted,
+  DeleteEventsFailed,
+  DeleteSnapshotsCompleted,
+  DeleteSnapshotsFailed,
+  DeletionTarget,
+  EventRejectedException,
+  IdempotencyKeyCheckRejectedException,
+  IdempotencyKeyWriteRejectedException,
+  SnapshotCompleted,
+  SnapshotFailed,
+  SnapshotMetadata,
+  SnapshotSelectionCriteria
+}
 import akka.persistence.typed.internal.Running.WithSeqNrAccessible
-import akka.persistence.typed.SnapshotMetadata
-import akka.persistence.typed.SnapshotSelectionCriteria
 import akka.persistence.typed.scaladsl.{ Effect, IdempotenceFailure, IdempotentCommand }
 import akka.util.unused
 
@@ -495,7 +499,7 @@ private[akka] object Running {
 
           if (pendingCommand.writeConfig.doExplicitWrite(persistEffectPresent)) {
             internalWriteIdempotencyKey(idempotencyKey)
-            new WritingIdempotenceKey(state, pendingCommand)
+            new WritingIdempotenceKey(state, pendingCommand, idempotencyKey)
           } else {
             val running = new HandlingCommands(state)
             running.applyEffects(pendingCommand, state, effect)
@@ -507,6 +511,8 @@ private[akka] object Running {
           val msg = "Exception while checking for idempotency key existence. " +
             s"PersistenceId [${setup.persistenceId.id}]. ${cause.getMessage}"
           throw new JournalFailureException(msg, cause)
+        case IdempotencyCheckRejected(cause) =>
+          throw new IdempotencyKeyCheckRejectedException(setup.persistenceId, idempotencyKey, cause)
         case _ =>
           onDeleteEventsJournalResponse(response, state.state)
       }
@@ -517,7 +523,8 @@ private[akka] object Running {
 
   @InternalApi private[akka] class WritingIdempotenceKey[IC <: C with IdempotentCommand](
       state: RunningState[S],
-      pendingCommand: IC)
+      pendingCommand: IC,
+      idempotencyKey: String)
       extends AbstractBehavior[InternalProtocol](setup.context) {
 
     override def onMessage(msg: InternalProtocol): Behavior[InternalProtocol] = msg match {
@@ -551,6 +558,8 @@ private[akka] object Running {
           val msg = "Exception while writing idempotency key. " +
             s"PersistenceId [${setup.persistenceId.id}]. ${cause.getMessage}"
           throw new JournalFailureException(msg, cause)
+        case WriteIdempotencyKeyRejected(cause) =>
+          throw new IdempotencyKeyWriteRejectedException(setup.persistenceId, idempotencyKey, cause)
         case _ =>
           onDeleteEventsJournalResponse(response, state.state)
       }
