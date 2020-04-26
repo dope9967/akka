@@ -219,7 +219,6 @@ private[akka] final case class EventSourcedBehaviorImpl[Command, Event, State](
   override def onPersistFailure(
       backoffStrategy: BackoffSupervisorStrategy): EventSourcedBehavior[Command, Event, State] =
     copy(supervisionStrategy = backoffStrategy)
-
 }
 
 /** Protocol used internally by the eventsourced behaviors. */

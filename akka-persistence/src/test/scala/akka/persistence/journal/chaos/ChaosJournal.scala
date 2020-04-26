@@ -7,9 +7,11 @@ package akka.persistence.journal.chaos
 import scala.collection.immutable
 import scala.concurrent.Future
 import java.util.concurrent.ThreadLocalRandom
+
 import akka.persistence._
 import akka.persistence.journal.AsyncWriteJournal
-import akka.persistence.journal.inmem.InmemMessages
+import akka.persistence.journal.inmem.{ InmemIdempotencyKeys, InmemMessages }
+
 import scala.util.Try
 import scala.util.control.NonFatal
 
@@ -27,8 +29,11 @@ class ReadHighestFailedException extends TestException(s"recovery failed when re
  */
 private object ChaosJournalMessages extends InmemMessages
 
+private object ChaosJournalIdempotencyKeys extends InmemIdempotencyKeys
+
 class ChaosJournal extends AsyncWriteJournal {
   import ChaosJournalMessages.{ delete => del, _ }
+  import ChaosJournalIdempotencyKeys._
 
   val config = context.system.settings.config.getConfig("akka.persistence.journal.chaos")
   val writeFailureRate = config.getDouble("write-failure-rate")
@@ -44,6 +49,7 @@ class ChaosJournal extends AsyncWriteJournal {
       else
         for (a <- messages) yield {
           a.payload.foreach(add)
+          a.idempotenceKey.foreach(addKey(a.persistenceId, _))
           AsyncWriteJournal.successUnit
         }
     } catch {
@@ -78,4 +84,10 @@ class ChaosJournal extends AsyncWriteJournal {
 
   def shouldFail(rate: Double): Boolean =
     random.nextDouble() < rate
+
+  override def asyncCheckIdempotencyKeyExists(persistenceId: String, key: String): Future[Boolean] =
+    Future.successful(keys.get(persistenceId).exists(_.contains(key)))
+
+  override def asyncWriteIdempotencyKey(persistenceId: String, key: String): Future[Unit] =
+    Future.successful(addKey(persistenceId, key))
 }
