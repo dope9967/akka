@@ -32,6 +32,8 @@ object InmemJournal {
   final case class Write(event: Any, persistenceId: String, sequenceNr: Long) extends Operation
 
   final case class Delete(persistenceId: String, toSequenceNr: Long) extends Operation
+
+  final case class WriteIdempotenceKey(key: String, persistenceId: String) extends Operation
 }
 
 /**
@@ -63,6 +65,7 @@ object InmemJournal {
         add(p)
         w.idempotenceKey.foreach(addKey(w.persistenceId, _))
         eventStream.publish(InmemJournal.Write(p.payload, p.persistenceId, p.sequenceNr))
+        w.idempotenceKey.foreach(key => eventStream.publish(InmemJournal.WriteIdempotenceKey(key, p.persistenceId)))
       }
       Future.successful(Nil) // all good
     } catch {
@@ -111,6 +114,7 @@ object InmemJournal {
 
   override def asyncWriteIdempotencyKey(persistenceId: String, key: String): Future[Unit] = {
     addKey(persistenceId, key)
+    eventStream.publish(InmemJournal.WriteIdempotenceKey(key, persistenceId))
     Future.successful(())
   }
 }
