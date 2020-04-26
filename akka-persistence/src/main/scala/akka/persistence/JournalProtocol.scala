@@ -144,7 +144,7 @@ private[persistence] object JournalProtocol {
    */
   final case class ReplayMessagesFailure(cause: Throwable) extends Response with DeadLetterSuppression
 
-  final case class CheckIndempotencyKeyExists(persistenceId: String, idempotencyKey: String, persistentActor: ActorRef)
+  final case class CheckIdempotencyKeyExists(persistenceId: String, idempotencyKey: String, persistentActor: ActorRef)
       extends Request
 
   final case class IdempotencyCheckSuccess(exists: Boolean) extends Response with DeadLetterSuppression

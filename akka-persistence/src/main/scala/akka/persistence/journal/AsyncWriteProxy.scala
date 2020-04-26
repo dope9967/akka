@@ -94,7 +94,7 @@ private[persistence] trait AsyncWriteProxy extends AsyncWriteJournal with Stash 
   override def asyncCheckIdempotencyKeyExists(persistenceId: String, key: String): Future[Boolean] = {
     store match {
       case Some(s) =>
-        (s ? CheckIndempotencyKeyExists(persistenceId, key)).flatMap {
+        (s ? CheckIdempotencyKeyExists(persistenceId, key)).flatMap {
           case IdempotencyCheckSuccess(result) =>
             Future.successful(result)
           case IdempotencyCheckFailure(cause) =>
@@ -146,7 +146,7 @@ private[persistence] object AsyncWriteTarget {
   final case class ReplayFailure(cause: Throwable)
 
   @SerialVersionUID(1L)
-  final case class CheckIndempotencyKeyExists(persistenceId: String, idempotencyKey: String)
+  final case class CheckIdempotencyKeyExists(persistenceId: String, idempotencyKey: String)
 
   @SerialVersionUID(1L)
   case class IdempotencyCheckSuccess(result: Boolean)

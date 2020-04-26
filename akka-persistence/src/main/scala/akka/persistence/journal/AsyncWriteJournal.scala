@@ -197,7 +197,7 @@ trait AsyncWriteJournal extends Actor with WriteJournalBase with AsyncRecovery w
             if (publish) eventStream.publish(d)
           }
 
-      case ci @ CheckIndempotencyKeyExists(persistenceId, idempotencyKey, persistentActor) =>
+      case ci @ CheckIdempotencyKeyExists(persistenceId, idempotencyKey, persistentActor) =>
         breaker
           .withCircuitBreaker(asyncCheckIdempotencyKeyExists(persistenceId, idempotencyKey))
           .map { exists =>
