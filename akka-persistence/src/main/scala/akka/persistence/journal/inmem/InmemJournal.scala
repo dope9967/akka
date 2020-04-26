@@ -33,7 +33,9 @@ object InmemJournal {
 
   final case class Delete(persistenceId: String, toSequenceNr: Long) extends Operation
 
-  final case class WriteIdempotenceKey(key: String, persistenceId: String) extends Operation
+  final case class CheckIdempotenceKeyExists(persistenceId: String, key: String) extends Operation
+
+  final case class WriteIdempotenceKey(persistenceId: String, key: String) extends Operation
 }
 
 /**
@@ -65,7 +67,7 @@ object InmemJournal {
         add(p)
         w.idempotenceKey.foreach(addKey(w.persistenceId, _))
         eventStream.publish(InmemJournal.Write(p.payload, p.persistenceId, p.sequenceNr))
-        w.idempotenceKey.foreach(key => eventStream.publish(InmemJournal.WriteIdempotenceKey(key, p.persistenceId)))
+        w.idempotenceKey.foreach(key => eventStream.publish(InmemJournal.WriteIdempotenceKey(p.persistenceId, key)))
       }
       Future.successful(Nil) // all good
     } catch {
@@ -109,12 +111,14 @@ object InmemJournal {
   }
 
   override def asyncCheckIdempotencyKeyExists(persistenceId: String, key: String): Future[Boolean] = {
-    Future.successful(keys.get(persistenceId).exists(_.contains(key)))
+    val exists = keys.get(persistenceId).exists(_.contains(key))
+    eventStream.publish(InmemJournal.CheckIdempotenceKeyExists(persistenceId, key))
+    Future.successful(exists)
   }
 
   override def asyncWriteIdempotencyKey(persistenceId: String, key: String): Future[Unit] = {
     addKey(persistenceId, key)
-    eventStream.publish(InmemJournal.WriteIdempotenceKey(key, persistenceId))
+    eventStream.publish(InmemJournal.WriteIdempotenceKey(persistenceId, key))
     Future.successful(())
   }
 }
