@@ -5,10 +5,9 @@
 package akka.persistence.typed.internal
 
 import scala.annotation.tailrec
-import scala.collection.{ immutable }
+import scala.collection.immutable
 import akka.actor.UnhandledMessage
-import akka.actor.typed.Behavior
-import akka.actor.typed.Signal
+import akka.actor.typed.{ Behavior, Signal }
 import akka.actor.typed.internal.PoisonPill
 import akka.actor.typed.scaladsl.{ AbstractBehavior, ActorContext, Behaviors, LoggerOps }
 import akka.annotation.{ InternalApi, InternalStableApi }
@@ -26,18 +25,21 @@ import akka.persistence.SaveSnapshotSuccess
 import akka.persistence.SnapshotProtocol
 import akka.persistence.journal.Tagged
 import akka.persistence.typed.{
+  CheckIdempotencyKeyExistsFailed,
+  CheckIdempotencyKeyExistsSucceeded,
   DeleteEventsCompleted,
   DeleteEventsFailed,
   DeleteSnapshotsCompleted,
   DeleteSnapshotsFailed,
   DeletionTarget,
   EventRejectedException,
-  IdempotencyKeyCheckRejectedException,
   IdempotencyKeyWriteRejectedException,
   SnapshotCompleted,
   SnapshotFailed,
   SnapshotMetadata,
-  SnapshotSelectionCriteria
+  SnapshotSelectionCriteria,
+  WriteIdempotencyKeyFailed,
+  WriteIdempotencyKeySucceeded
 }
 import akka.persistence.typed.internal.Running.WithSeqNrAccessible
 import akka.persistence.typed.scaladsl.{ Effect, IdempotenceFailure, IdempotentCommand }
@@ -121,9 +123,9 @@ private[akka] object Running {
     extends JournalInteractions[C, E, S]
     with SnapshotInteractions[C, E, S]
     with StashManagement[C, E, S] {
+  import BehaviorSetup._
   import InternalProtocol._
   import Running.RunningState
-  import BehaviorSetup._
 
   final class HandlingCommands(state: RunningState[S])
       extends AbstractBehavior[InternalProtocol](setup.context)
@@ -372,6 +374,7 @@ private[akka] object Running {
 
         case WriteIdempotencyKeySuccess(key, id) =>
           if (id == setup.writerIdentity.instanceId) {
+            setup.onSignal(state.state, WriteIdempotencyKeySucceeded(key), catchAndLog = false)
             // apply to state once messages are written successfully
             writtenIdempotenceKey = Some(key)
           }
@@ -528,6 +531,11 @@ private[akka] object Running {
     final def onJournalResponse(response: Response): Behavior[InternalProtocol] = {
       response match {
         case IdempotencyCheckSuccess(false) =>
+          setup.onSignal(
+            state.state,
+            CheckIdempotencyKeyExistsSucceeded(idempotencyKey, exists = false),
+            catchAndLog = false)
+
           val effect = setup.commandHandler(state.state, pendingCommand).asInstanceOf[EffectImpl[E, S]] // TODO can we avoid the cast?
 
           val persistEffectPresent = {
@@ -553,15 +561,20 @@ private[akka] object Running {
             running.applyEffects(pendingCommand, state, effect)
           }
         case IdempotencyCheckSuccess(true) =>
+          setup.onSignal(
+            state.state,
+            CheckIdempotencyKeyExistsSucceeded(idempotencyKey, exists = true),
+            catchAndLog = false)
+
           pendingCommand.replyTo ! IdempotenceFailure
           val newState = state.addIdempotenceKeyToCache(idempotencyKey, setup.idempotenceKeyCacheSize)
           tryUnstashOne(new HandlingCommands(newState))
         case IdempotencyCheckFailure(cause) =>
+          setup.onSignal(state.state, CheckIdempotencyKeyExistsFailed(idempotencyKey, cause), catchAndLog = false)
+
           val msg = "Exception while checking for idempotency key existence. " +
             s"PersistenceId [${setup.persistenceId.id}]. ${cause.getMessage}"
           throw new JournalFailureException(msg, cause)
-        case IdempotencyCheckRejected(cause) =>
-          throw new IdempotencyKeyCheckRejectedException(setup.persistenceId, idempotencyKey, cause)
         case _ =>
           onDeleteEventsJournalResponse(response, state.state)
       }
@@ -599,11 +612,15 @@ private[akka] object Running {
     final def onJournalResponse(response: Response): Behavior[InternalProtocol] = {
       response match {
         case WriteIdempotencyKeySuccess(idempotenceKey, _) =>
+          setup.onSignal(state.state, WriteIdempotencyKeySucceeded(idempotencyKey), catchAndLog = false)
+
           val newState = state.addIdempotenceKeyToCache(idempotenceKey, setup.idempotenceKeyCacheSize)
           val effect = setup.commandHandler(newState.state, pendingCommand)
           val running = new HandlingCommands(newState)
           running.applyEffects(pendingCommand, newState, effect.asInstanceOf[EffectImpl[E, S]]) // TODO can we avoid the cast?
         case WriteIdempotencyKeyFailure(_, cause, _) =>
+          setup.onSignal(state.state, WriteIdempotencyKeyFailed(idempotencyKey, cause), catchAndLog = false)
+
           val msg = "Exception while writing idempotency key. " +
             s"PersistenceId [${setup.persistenceId.id}]. ${cause.getMessage}"
           throw new JournalFailureException(msg, cause)
