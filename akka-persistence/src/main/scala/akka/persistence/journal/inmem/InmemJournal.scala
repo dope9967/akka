@@ -210,7 +210,7 @@ object InmemJournal {
     keys.get(pid) match {
       case Some(keys) =>
         keys
-          .filterKeys(seqNr => fromSeqNr <= seqNr && seqNr <= toSeqNr)
+          .filterKeys(seqNr => fromSeqNr < seqNr && seqNr <= toSeqNr)
           .map { case (seqNr, key) => (key, seqNr) }
           .to[immutable.Seq]
       case None =>
