@@ -113,6 +113,7 @@ private[akka] final case class EventSourcedBehaviorImpl[Command, Event, State](
         ctx.log.debug("Events successfully deleted to sequence number [{}].", toSequenceNr)
       case (_, DeleteEventsFailed(toSequenceNr, failure)) =>
         ctx.log.warn2("Failed to delete events to sequence number [{}] due to: {}", toSequenceNr, failure.getMessage)
+      //TODO add idempotency related signal handlers
     }
 
     // do this once, even if the actor is restarted

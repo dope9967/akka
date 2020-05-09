@@ -5,7 +5,7 @@
 package akka.persistence.typed.internal
 
 import scala.annotation.tailrec
-import scala.collection.immutable
+import scala.collection.{ immutable, mutable }
 import akka.actor.UnhandledMessage
 import akka.actor.typed.{ Behavior, Signal }
 import akka.actor.typed.internal.PoisonPill
@@ -67,20 +67,49 @@ import akka.util.unused
 private[akka] object Running {
 
   trait WithSeqNrAccessible {
-    def currentSequenceNumber: Long
+    def currentEventSequenceNumber: Long
+  }
+
+  trait IdempotencyKeyCache {
+
+    def contains(key: String): Boolean
+
+    def addKey(key: String): IdempotencyKeyCache
+  }
+
+  case object NoCache extends IdempotencyKeyCache {
+
+    override def contains(key: String): Boolean = false
+
+    override def addKey(key: String): IdempotencyKeyCache = this
+  }
+
+  //TODO finish implementation
+  case class LRUCache(keys: mutable.LinkedHashSet[String], size: Long) extends IdempotencyKeyCache {
+
+    override def contains(key: String): Boolean = ???
+
+    override def addKey(key: String): IdempotencyKeyCache = ???
   }
 
   final case class RunningState[State](
-      seqNr: Long,
+      eventSeqNr: Long,
       state: State,
       receivedPoisonPill: Boolean,
-      private val idempotenceKeyCache: immutable.Vector[String]) {
+      idempotenceKeySeqNr: Long,
+      private val idempotenceKeyCache: immutable.Vector[String]) { //TODO implement at least a LRU cache
 
-    def nextSequenceNr(): RunningState[State] =
-      copy(seqNr = seqNr + 1)
+    def nextEventSequenceNr(): RunningState[State] =
+      copy(eventSeqNr = eventSeqNr + 1)
 
-    def updateLastSequenceNr(persistent: PersistentRepr): RunningState[State] =
-      if (persistent.sequenceNr > seqNr) copy(seqNr = persistent.sequenceNr) else this
+    def updateLastEventSequenceNr(persistent: PersistentRepr): RunningState[State] =
+      if (persistent.sequenceNr > eventSeqNr) copy(eventSeqNr = persistent.sequenceNr) else this
+
+    def nextIdempotenceKeySequenceNr(): RunningState[State] =
+      copy(idempotenceKeySeqNr = idempotenceKeySeqNr + 1)
+
+    def updateLastIdempotenceKeySequenceNr(seqNr: Long): RunningState[State] =
+      copy(idempotenceKeySeqNr = seqNr)
 
     def applyEvent[C, E](setup: BehaviorSetup[C, E, State], event: E): RunningState[State] = {
       val updated = setup.eventHandler(state, event)
@@ -199,7 +228,7 @@ private[akka] object Running {
           val newState2 =
             internalPersist(setup.context, msg, newState, eventToPersist, eventAdapterManifest, idempotencyKey)
 
-          val shouldSnapshotAfterPersist = setup.shouldSnapshot(newState2.state, event, newState2.seqNr)
+          val shouldSnapshotAfterPersist = setup.shouldSnapshot(newState2.state, event, newState2.eventSeqNr)
 
           persistingEvents(newState2, state, numberOfEvents = 1, shouldSnapshotAfterPersist, sideEffects)
 
@@ -208,7 +237,7 @@ private[akka] object Running {
             // apply the event before persist so that validation exception is handled before persisting
             // the invalid event, in case such validation is implemented in the event handler.
             // also, ensure that there is an event handler for each single event
-            var seqNr = state.seqNr
+            var seqNr = state.eventSeqNr
             val (newState, shouldSnapshotAfterPersist) = events.foldLeft((state, NoSnapshot: SnapshotAfterPersist)) {
               case ((currentState, snapshot), event) =>
                 seqNr += 1
@@ -261,7 +290,7 @@ private[akka] object Running {
 
     setup.setMdcPhase(PersistenceMdc.RunningCmds)
 
-    override def currentSequenceNumber: Long = state.seqNr
+    override def currentEventSequenceNumber: Long = state.eventSeqNr
   }
 
   // ===============================================
@@ -288,7 +317,7 @@ private[akka] object Running {
       with WithSeqNrAccessible {
 
     private var eventCounter = 0
-    private var writtenIdempotenceKey = Option.empty[String]
+    private var writtenIdempotencePayload = Option.empty[(String, Long)]
 
     override def onMessage(msg: InternalProtocol): Behavior[InternalProtocol] = {
       msg match {
@@ -320,7 +349,7 @@ private[akka] object Running {
       }
 
       def onWriteResponse(p: PersistentRepr): Behavior[InternalProtocol] = {
-        state = state.updateLastSequenceNr(p)
+        state = state.updateLastEventSequenceNr(p)
         eventCounter += 1
 
         onWriteSuccess(setup.context, p)
@@ -330,8 +359,12 @@ private[akka] object Running {
           onWriteDone(setup.context, p)
           this
         } else {
-          writtenIdempotenceKey.foreach(key =>
-            state = state.addIdempotenceKeyToCache(key, setup.idempotenceKeyCacheSize))
+          writtenIdempotencePayload.foreach {
+            case (key, seqNr) =>
+              state = state
+                .addIdempotenceKeyToCache(key, setup.idempotenceKeyCacheSize)
+                .updateLastIdempotenceKeySequenceNr(seqNr)
+          }
           visibleState = state
           if (shouldSnapshotAfterPersist == NoSnapshot || state.state == null) {
             val newState = applySideEffects(sideEffects, state)
@@ -372,19 +405,19 @@ private[akka] object Running {
           // ignore
           this // it will be stopped by the first WriteMessageFailure message; not applying side effects
 
-        case WriteIdempotencyKeySuccess(key, id) =>
+        case WriteIdempotencyKeySuccess(key, seqNr, id) =>
           if (id == setup.writerIdentity.instanceId) {
-            setup.onSignal(state.state, WriteIdempotencyKeySucceeded(key), catchAndLog = false)
+            setup.onSignal(state.state, WriteIdempotencyKeySucceeded(key, seqNr), catchAndLog = false)
             // apply to state once messages are written successfully
-            writtenIdempotenceKey = Some(key)
+            writtenIdempotencePayload = Some(key, seqNr)
           }
           this
 
-        case WriteIdempotencyKeyRejected(_, _, _) =>
+        case WriteIdempotencyKeyRejected(_, _, _, _) =>
           // handled with messages rejection
           this
 
-        case WriteIdempotencyKeyFailure(_, _, _) =>
+        case WriteIdempotencyKeyFailure(_, _, _, _) =>
           // handled with messages failure
           this
 
@@ -403,7 +436,7 @@ private[akka] object Running {
         else Behaviors.unhandled
     }
 
-    override def currentSequenceNumber: Long = visibleState.seqNr
+    override def currentEventSequenceNumber: Long = visibleState.eventSeqNr
   }
 
   // ===============================================
@@ -497,7 +530,7 @@ private[akka] object Running {
           Behaviors.unhandled
     }
 
-    override def currentSequenceNumber: Long = state.seqNr
+    override def currentEventSequenceNumber: Long = state.eventSeqNr
   }
 
   // --------------------------
@@ -554,8 +587,8 @@ private[akka] object Running {
           }
 
           if (pendingCommand.writeConfig.doExplicitWrite(persistEffectPresent)) {
-            internalWriteIdempotencyKey(idempotencyKey)
-            new WritingIdempotenceKey(state, pendingCommand, idempotencyKey)
+            val newState = internalWriteIdempotencyKey(state, idempotencyKey)
+            new WritingIdempotenceKey(newState, pendingCommand)
           } else {
             val running = new HandlingCommands(state)
             running.applyEffects(pendingCommand, state, effect)
@@ -585,8 +618,7 @@ private[akka] object Running {
 
   @InternalApi private[akka] class WritingIdempotenceKey[IC <: C with IdempotentCommand[_, S]](
       state: RunningState[S],
-      pendingCommand: IC,
-      idempotencyKey: String)
+      pendingCommand: IC)
       extends AbstractBehavior[InternalProtocol](setup.context) {
 
     override def onMessage(msg: InternalProtocol): Behavior[InternalProtocol] = msg match {
@@ -611,21 +643,23 @@ private[akka] object Running {
 
     final def onJournalResponse(response: Response): Behavior[InternalProtocol] = {
       response match {
-        case WriteIdempotencyKeySuccess(idempotenceKey, _) =>
-          setup.onSignal(state.state, WriteIdempotencyKeySucceeded(idempotencyKey), catchAndLog = false)
+        case WriteIdempotencyKeySuccess(idempotencyKey, sequenceNr, _) =>
+          setup.onSignal(state.state, WriteIdempotencyKeySucceeded(idempotencyKey, sequenceNr), catchAndLog = false)
 
-          val newState = state.addIdempotenceKeyToCache(idempotenceKey, setup.idempotenceKeyCacheSize)
+          val newState = state
+            .addIdempotenceKeyToCache(idempotencyKey, setup.idempotenceKeyCacheSize)
+            .updateLastIdempotenceKeySequenceNr(sequenceNr)
           val effect = setup.commandHandler(newState.state, pendingCommand)
           val running = new HandlingCommands(newState)
           running.applyEffects(pendingCommand, newState, effect.asInstanceOf[EffectImpl[E, S]]) // TODO can we avoid the cast?
-        case WriteIdempotencyKeyFailure(_, cause, _) =>
-          setup.onSignal(state.state, WriteIdempotencyKeyFailed(idempotencyKey, cause), catchAndLog = false)
+        case WriteIdempotencyKeyFailure(key, seqNr, cause, _) =>
+          setup.onSignal(state.state, WriteIdempotencyKeyFailed(key, seqNr, cause), catchAndLog = false)
 
           val msg = "Exception while writing idempotency key. " +
             s"PersistenceId [${setup.persistenceId.id}]. ${cause.getMessage}"
           throw new JournalFailureException(msg, cause)
-        case WriteIdempotencyKeyRejected(_, cause, _) =>
-          throw new IdempotencyKeyWriteRejectedException(setup.persistenceId, idempotencyKey, cause)
+        case WriteIdempotencyKeyRejected(key, seqNr, cause, _) =>
+          throw new IdempotencyKeyWriteRejectedException(setup.persistenceId, key, seqNr, cause)
         case _ =>
           onDeleteEventsJournalResponse(response, state.state)
       }
