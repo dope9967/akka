@@ -68,6 +68,7 @@ private[akka] object Running {
 
   trait WithSeqNrAccessible {
     def currentEventSequenceNumber: Long
+    def currentIdempotencyKeySequenceNumber: Long
   }
 
   trait IdempotencyKeyCache {
@@ -85,7 +86,7 @@ private[akka] object Running {
   }
 
   //TODO finish implementation
-  case class LRUCache(keys: mutable.LinkedHashSet[String], size: Long) extends IdempotencyKeyCache {
+  case class LRUCache(private val keys: mutable.LinkedHashSet[String], size: Long) extends IdempotencyKeyCache {
 
     override def contains(key: String): Boolean = ???
 
@@ -291,6 +292,7 @@ private[akka] object Running {
     setup.setMdcPhase(PersistenceMdc.RunningCmds)
 
     override def currentEventSequenceNumber: Long = state.eventSeqNr
+    override def currentIdempotencyKeySequenceNumber: Long = state.idempotenceKeySeqNr
   }
 
   // ===============================================
@@ -437,6 +439,7 @@ private[akka] object Running {
     }
 
     override def currentEventSequenceNumber: Long = visibleState.eventSeqNr
+    override def currentIdempotencyKeySequenceNumber: Long = visibleState.idempotenceKeySeqNr
   }
 
   // ===============================================
@@ -531,6 +534,7 @@ private[akka] object Running {
     }
 
     override def currentEventSequenceNumber: Long = state.eventSeqNr
+    override def currentIdempotencyKeySequenceNumber: Long = state.idempotenceKeySeqNr
   }
 
   // --------------------------

@@ -38,7 +38,7 @@ class EventSourcedSequenceNumberSpec
               case "stashing" =>
                 command match {
                   case "unstash" =>
-                    probe ! s"${EventSourcedBehavior.lastSequenceNumber(ctx)} unstash"
+                    probe ! s"${EventSourcedBehavior.lastEventSequenceNumber(ctx)} unstash"
                     Effect.persist("normal").thenUnstashAll()
                   case _ =>
                     Effect.stash()
@@ -46,23 +46,23 @@ class EventSourcedSequenceNumberSpec
               case _ =>
                 command match {
                   case "cmd" =>
-                    probe ! s"${EventSourcedBehavior.lastSequenceNumber(ctx)} onCommand"
+                    probe ! s"${EventSourcedBehavior.lastEventSequenceNumber(ctx)} onCommand"
                     Effect
                       .persist(command)
-                      .thenRun(_ => probe ! s"${EventSourcedBehavior.lastSequenceNumber(ctx)} thenRun")
+                      .thenRun(_ => probe ! s"${EventSourcedBehavior.lastEventSequenceNumber(ctx)} thenRun")
                   case "stash" =>
-                    probe ! s"${EventSourcedBehavior.lastSequenceNumber(ctx)} stash"
+                    probe ! s"${EventSourcedBehavior.lastEventSequenceNumber(ctx)} stash"
                     Effect.persist("stashing")
                   case "snapshot" =>
                     Effect.persist("snapshot")
                 }
             }
         }, { (_, evt) =>
-          probe ! s"${EventSourcedBehavior.lastSequenceNumber(ctx)} eventHandler"
+          probe ! s"${EventSourcedBehavior.lastEventSequenceNumber(ctx)} eventHandler"
           evt
         }).snapshotWhen((_, event, _) => event == "snapshot").receiveSignal {
           case (_, RecoveryCompleted) =>
-            probe ! s"${EventSourcedBehavior.lastSequenceNumber(ctx)} onRecoveryComplete"
+            probe ! s"${EventSourcedBehavior.lastEventSequenceNumber(ctx)} onRecoveryComplete"
         })
 
   "The sequence number" must {
