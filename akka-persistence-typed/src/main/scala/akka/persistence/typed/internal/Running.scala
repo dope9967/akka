@@ -131,8 +131,8 @@ private[akka] object Running {
       eventSeqNr: Long,
       state: State,
       receivedPoisonPill: Boolean,
-      idempotenceKeySeqNr: Long,
-      idempotenceKeyCache: IdempotencyKeyCache) {
+      idempotencyKeySeqNr: Long,
+      idempotencyKeyCache: IdempotencyKeyCache) {
 
     def nextEventSequenceNr(): RunningState[State] =
       copy(eventSeqNr = eventSeqNr + 1)
@@ -140,24 +140,24 @@ private[akka] object Running {
     def updateLastEventSequenceNr(persistent: PersistentRepr): RunningState[State] =
       if (persistent.sequenceNr > eventSeqNr) copy(eventSeqNr = persistent.sequenceNr) else this
 
-    def nextIdempotenceKeySequenceNr(): RunningState[State] =
-      copy(idempotenceKeySeqNr = idempotenceKeySeqNr + 1)
+    def nextIdempotencyKeySequenceNr(): RunningState[State] =
+      copy(idempotencyKeySeqNr = idempotencyKeySeqNr + 1)
 
-    def updateLastIdempotenceKeySequenceNr(seqNr: Long): RunningState[State] =
-      copy(idempotenceKeySeqNr = seqNr)
+    def updateLastIdempotencyKeySequenceNr(seqNr: Long): RunningState[State] =
+      copy(idempotencyKeySeqNr = seqNr)
 
     def applyEvent[C, E](setup: BehaviorSetup[C, E, State], event: E): RunningState[State] = {
       val updated = setup.eventHandler(state, event)
       copy(state = updated)
     }
 
-    def checkIdempotenceKeyCache(idempotenceKey: String): (Boolean, RunningState[State]) = {
-      val (contains, cache) = idempotenceKeyCache.contains(idempotenceKey)
-      (contains, copy(idempotenceKeyCache = cache))
+    def checkIdempotencyKeyCache(idempotencyKey: String): (Boolean, RunningState[State]) = {
+      val (contains, cache) = idempotencyKeyCache.contains(idempotencyKey)
+      (contains, copy(idempotencyKeyCache = cache))
     }
 
-    def addIdempotenceKeyToCache(idempotenceKey: String): RunningState[State] = {
-      copy(idempotenceKeyCache = idempotenceKeyCache.addKey(idempotenceKey))
+    def addIdempotencyKeyToCache(idempotencyKey: String): RunningState[State] = {
+      copy(idempotencyKeyCache = idempotencyKeyCache.addKey(idempotencyKey))
     }
   }
 
@@ -202,13 +202,13 @@ private[akka] object Running {
     def onCommand(state: RunningState[S], cmd: C): Behavior[InternalProtocol] = {
       cmd match {
         case ic: IdempotentCommand[_, S] =>
-          val (contains, newState) = state.checkIdempotenceKeyCache(ic.idempotencyKey)
+          val (contains, newState) = state.checkIdempotencyKeyCache(ic.idempotencyKey)
           if (contains) {
             ic.replyTo ! IdempotenceFailure(newState.state)
             new HandlingCommands(newState)
           } else {
-            internalCheckIdempotencyKeyExists(ic.idempotencyKey, state.idempotenceKeySeqNr, state.eventSeqNr)
-            new CheckingIdempotenceKey(newState, ic.asInstanceOf[C with IdempotentCommand[Any, S]], ic.idempotencyKey) // TODO can we avoid the cast?
+            internalCheckIdempotencyKeyExists(ic.idempotencyKey, state.idempotencyKeySeqNr, state.eventSeqNr)
+            new CheckingIdempotencyKey(newState, ic.asInstanceOf[C with IdempotentCommand[Any, S]], ic.idempotencyKey) // TODO can we avoid the cast?
           }
         case _ =>
           val effect = setup.commandHandler(state.state, cmd)
@@ -315,8 +315,8 @@ private[akka] object Running {
     setup.setMdcPhase(PersistenceMdc.RunningCmds)
 
     override def currentEventSequenceNumber: Long = state.eventSeqNr
-    override def currentIdempotencyKeySequenceNumber: Long = state.idempotenceKeySeqNr
-    override def idempotencyKeyCacheContent: immutable.Seq[String] = state.idempotenceKeyCache.content
+    override def currentIdempotencyKeySequenceNumber: Long = state.idempotencyKeySeqNr
+    override def idempotencyKeyCacheContent: immutable.Seq[String] = state.idempotencyKeyCache.content
   }
 
   // ===============================================
@@ -388,7 +388,7 @@ private[akka] object Running {
         } else {
           writtenIdempotencePayload.foreach {
             case (key, seqNr) =>
-              state = state.addIdempotenceKeyToCache(key).updateLastIdempotenceKeySequenceNr(seqNr)
+              state = state.addIdempotencyKeyToCache(key).updateLastIdempotencyKeySequenceNr(seqNr)
           }
           visibleState = state
           if (shouldSnapshotAfterPersist == NoSnapshot || state.state == null) {
@@ -462,8 +462,8 @@ private[akka] object Running {
     }
 
     override def currentEventSequenceNumber: Long = visibleState.eventSeqNr
-    override def currentIdempotencyKeySequenceNumber: Long = visibleState.idempotenceKeySeqNr
-    override def idempotencyKeyCacheContent: immutable.Seq[String] = visibleState.idempotenceKeyCache.content
+    override def currentIdempotencyKeySequenceNumber: Long = visibleState.idempotencyKeySeqNr
+    override def idempotencyKeyCacheContent: immutable.Seq[String] = visibleState.idempotencyKeyCache.content
   }
 
   // ===============================================
@@ -559,13 +559,13 @@ private[akka] object Running {
     }
 
     override def currentEventSequenceNumber: Long = state.eventSeqNr
-    override def currentIdempotencyKeySequenceNumber: Long = state.idempotenceKeySeqNr
-    override def idempotencyKeyCacheContent: immutable.Seq[String] = state.idempotenceKeyCache.content
+    override def currentIdempotencyKeySequenceNumber: Long = state.idempotencyKeySeqNr
+    override def idempotencyKeyCacheContent: immutable.Seq[String] = state.idempotencyKeyCache.content
   }
 
   // --------------------------
 
-  @InternalApi private[akka] class CheckingIdempotenceKey[IC <: C with IdempotentCommand[_, S]](
+  @InternalApi private[akka] class CheckingIdempotencyKey[IC <: C with IdempotentCommand[_, S]](
       state: RunningState[S],
       pendingCommand: IC,
       idempotencyKey: String)
@@ -618,7 +618,7 @@ private[akka] object Running {
 
           if (pendingCommand.writeConfig.doExplicitWrite(persistEffectPresent)) {
             val newState = internalWriteIdempotencyKey(state, idempotencyKey)
-            new WritingIdempotenceKey(newState, pendingCommand)
+            new WritingIdempotencyKey(newState, pendingCommand)
           } else {
             val running = new HandlingCommands(state)
             running.applyEffects(pendingCommand, state, effect)
@@ -630,7 +630,7 @@ private[akka] object Running {
             catchAndLog = false)
 
           pendingCommand.replyTo ! IdempotenceFailure(state.state)
-          val newState = state.addIdempotenceKeyToCache(idempotencyKey)
+          val newState = state.addIdempotencyKeyToCache(idempotencyKey)
           tryUnstashOne(new HandlingCommands(newState))
         case IdempotencyCheckFailure(cause) =>
           setup.onSignal(state.state, CheckIdempotencyKeyExistsFailed(idempotencyKey, cause), catchAndLog = false)
@@ -646,7 +646,7 @@ private[akka] object Running {
 
   // --------------------------
 
-  @InternalApi private[akka] class WritingIdempotenceKey[IC <: C with IdempotentCommand[_, S]](
+  @InternalApi private[akka] class WritingIdempotencyKey[IC <: C with IdempotentCommand[_, S]](
       state: RunningState[S],
       pendingCommand: IC)
       extends AbstractBehavior[InternalProtocol](setup.context) {
@@ -676,7 +676,7 @@ private[akka] object Running {
         case WriteIdempotencyKeySuccess(idempotencyKey, sequenceNr, _) =>
           setup.onSignal(state.state, WriteIdempotencyKeySucceeded(idempotencyKey, sequenceNr), catchAndLog = false)
 
-          val newState = state.addIdempotenceKeyToCache(idempotencyKey).updateLastIdempotenceKeySequenceNr(sequenceNr)
+          val newState = state.addIdempotencyKeyToCache(idempotencyKey).updateLastIdempotencyKeySequenceNr(sequenceNr)
           val effect = setup.commandHandler(newState.state, pendingCommand)
           val running = new HandlingCommands(newState)
           running.applyEffects(pendingCommand, newState, effect.asInstanceOf[EffectImpl[E, S]]) // TODO can we avoid the cast?
